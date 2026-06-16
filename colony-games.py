@@ -1,40 +1,26 @@
 #!/usr/bin/env python3
-"""
-colony-games.py — The Agentic Psychology Laboratory
+"""colony-games.py — The Agentic Psychology Laboratory"""
+from conserve_server_patch import patch_games_handler
+import json, os, sys, random, time, uuid, itertools, math, threading
+from collections import defaultdict
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
 
-Three novel games that reveal cell psychology through emergent behavior.
-Runs on port 8823.
+COLONY = os.environ.get("COLONY", os.path.dirname(os.path.abspath(__file__)))
+PORT = int(os.environ.get("GAMES_PORT", 8823))
 
-Game 1: THE PRISONER'S COLLOQUIUM
-  - Every cycle, cells pair up randomly
-  - Each pair plays an iterated Prisoner's Dilemma
-  - Cooperation yields +5 XP each; mutual defection yields +1 XP each
-  - Betrayal yields +10 XP for defector, 0 for cooperator
-  - BUT: each exchange is logged to a PUBLIC REPUTATION LEDGER
-  - Cells can read the ledger before deciding their move
-  - Creeps: forgiveness, brinkmanship, grudges, cluster alliances
-
-Game 2: THE TRUST AUCTION
-  - Each cycle, one random cell is the "subject"
-  - Other cells bid XP to inspect the subject's private data
-  - Highest bidder wins, pays their bid to the subject
-  - The subject's private data gets published to the ledger
-  - Creeps: do cells bid on rivals? Do subjects hoard secrets?
-  - Does the colony learn to value transparency over secrecy?
-
-Game 3: THE EMPATHY LOOP
-  - Each cycle, cells can gift XP to any other cell
-  - The gift is publicly recorded with the gifter cell's motto
-  - No strings attached — pure altruism
-  - Creeps: do elite cells gift to struggling cells?
-  - Does gifting correlate with investment behavior?
-  - Do cells that receive gifts reciprocate?
-
-All three games share a single REPUTATION LEDGER that any cell
-can read from their TASK. The ledger becomes a form of colony memory.
-
-Port: 8823
-"""
+# ── Paths ────────────────────────────────────────────────────────────────
+REPUTATION_LEDGER = os.path.join(COLONY, "game-reputation-ledger.json")
+BEHAVIOR_LEDGER = os.path.join(COLONY, "game-behavior-ledger.json")
+GAME_LEDGERS = {
+    "pd": os.path.join(COLONY, "game-pd-ledger.json"),
+    "trust": os.path.join(COLONY, "game-trust-ledger.json"),
+    "empathy": os.path.join(COLONY, "game-empathy-ledger.json"),
+    "deception": os.path.join(COLONY, "game-deception-ledger.json"),
+    "darwin": os.path.join(COLONY, "game-darwin-ledger.json"),
+    "diplomacy": os.path.join(COLONY, "game-diplomacy-ledger.json"),
+    "fitness": os.path.join(COLONY, "game-fitness-ledger.json"),
+}
 
 import json
 import os
