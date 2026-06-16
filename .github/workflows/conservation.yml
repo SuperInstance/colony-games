@@ -1,0 +1,168 @@
+name: Colony Conservation Gate
+
+on:
+  push:
+    paths:
+      - 'colony-games.py'
+      - 'colony-games-darwin-reputation.py'
+      - 'mafia_module.py'
+      - 'game-*.json'
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  # ──────────────────────────────────────────────
+  # 1. Compute γ/η from experimental data
+  # ──────────────────────────────────────────────
+  compute-conservation:
+    name: "Compute γ/η from Experimental Data"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install msgpack numpy
+
+      - name: Compute conservation metrics from experimental data
+        id: compute
+        run: |
+          # Check if there's an experiment results file
+          if [ -f "game-reputation-ledger.json" ]; then
+            # Extract cooperation rates and compute γ, η
+            python3 -c "
+import json, math
+
+with open('game-reputation-ledger.json') as f:
+    data = json.load(f)
+
+cells = data.get('cells', data)
+n = len(cells)
+if n == 0:
+    print('gamma=0.5')
+    print('eta=0.5')
+    exit(0)
+
+# γ = coordination cost = mean cooperation deviation from 0.5
+coop_rates = [c.get('cooperate_rate', 0.5) for c in cells.values()]
+gamma = sum(abs(r - 0.5) for r in coop_rates) / n
+gamma = max(0.0, min(1.0, gamma))
+
+# η = interaction complexity = (unique pairs) / (max possible pairs)
+max_pairs = n * (n - 1) / 2
+# Use games_played as proxy for actual interactions
+games_played = sum(c.get('games_played', 0) for c in cells.values())
+eta = min(1.0, games_played / (max_pairs * 100)) if max_pairs > 0 else 0.5
+
+print(f'gamma={gamma:.4f}')
+print(f'eta={eta:.4f}')
+print(f'n={n}')
+print(f'C={gamma + eta:.4f}')
+"
+          else:
+            echo "gamma=0.5"
+            echo "eta=0.5"
+            echo "n=0"
+            echo "C=1.0"
+          fi | tee -a $GITHUB_OUTPUT
+
+      - name: Run conservation check
+        uses: SuperInstance/conservation-action@v1
+        with:
+          gamma: ${{ steps.compute.outputs.gamma }}
+          eta: ${{ steps.compute.outputs.eta }}
+          fail-on-violation: false
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Colony Conservation Report" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Metric | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| γ (coordination cost) | ${{ steps.compute.outputs.gamma }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| η (interaction complexity) | ${{ steps.compute.outputs.eta }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| γ + η | ${{ steps.compute.outputs.C }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Budget C | 1.585 (log₂(3)) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Cells (n) | ${{ steps.compute.outputs.n }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+  # ──────────────────────────────────────────────
+  # 2. Run Darwin reputation experiment
+  # ──────────────────────────────────────────────
+  darwin-reputation:
+    name: "Run Darwin Reputation Experiment"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run inherited reputation experiment
+        run: |
+          python3 colony-games-darwin-reputation.py 2>&1
+
+  # ──────────────────────────────────────────────
+  # 3. Validate bottle protocol conformance
+  # ──────────────────────────────────────────────
+  protocol-conformance:
+    name: "Validate Bottle Protocol"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install protocol validation
+        run: |
+          pip install msgpack
+
+      - name: Verify bottle roundtrip
+        run: |
+          python3 -c "
+import sys
+sys.path.insert(0, '.')
+from integrations.superinstance_bottle import Bottle, audit, ConservationError
+
+# Test roundtrip
+bottle = Bottle.new(
+    src='colony-games-test',
+    tgt='fleet-pulse',
+    act='test.conservation',
+    trits=[-1, 0, 1],
+    payload={'experiment': 'darwin-rep', 'generation': 200},
+    ttl=60,
+)
+wire = bottle.encode()
+decoded = Bottle.decode(wire)
+assert decoded.decode_payload() == {'experiment': 'darwin-rep', 'generation': 200}
+assert decoded.trit_sum() == 0
+
+# Test conservation
+out = Bottle.new(
+    src='fleet-pulse', tgt='colony-games-test',
+    act='test.conservation.ack',
+    trits=[-1, 0, 1],
+    payload={'status': 'received'},
+    ttl=30,
+)
+assert audit(bottle, out)
+
+print('✅ Bottle protocol conformance passed')
+"
