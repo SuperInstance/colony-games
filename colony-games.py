@@ -658,6 +658,16 @@ class GamesHandler(BaseHTTPRequestHandler):
         print(f"[GAMES] {args[0]} {args[1]} {args[2]}", file=sys.stderr)
 
 
+# ── Conservation patch (γ+η=C) ─────────────────────────────────────
+try:
+    from conserve_server_patch import patch_games_handler
+    patch_games_handler(GamesHandler, lab)
+    HAVE_CONSERVE = True
+except ImportError as e:
+    print(f"[GAMES] Conservation patch not loaded: {e}", file=sys.stderr)
+    HAVE_CONSERVE = False
+
+
 def main():
     print(f"Colony Psychology Laboratory on port {PORT}", file=sys.stderr)
     print(f"Colony: {COLONY}", file=sys.stderr)
